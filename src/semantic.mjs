@@ -17,11 +17,48 @@ function endpointFor(baseUrl, localOnly) {
   if (localOnly && !['localhost', '127.0.0.1', '[::1]', '::1'].includes(url.hostname)) {
     throw new Error('localOnly blocks non-loopback embedding endpoints');
   }
-  // Ollama and other OpenAI-compatible providers accept POST /v1/embeddings.
-  return url.href.replace(/\/$/, '') + '/embeddings';
+  if (url.username || url.password) throw new Error('Embedding URLs must not contain credentials');
+  // Preserve already-specified /embeddings and strip query/hash from endpoint URLs.
+  url.search = '';
+  url.hash = '';
+  const pathname = url.pathname.replace(/\/+$/, '');
+  url.pathname = pathname.endsWith('/embeddings') ? pathname : pathname + '/embeddings';
+  return url.href;
 }
 
-export async function embedTexts(texts, config, fetchImpl = fetch) {
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+
+async function parseBoundedJSON(response) {
+  if (typeof response.body?.getReader !== 'function') {
+    // Supports non-streaming test adapters as well as custom fetch implementations.
+    const data = await response.json();
+    if (JSON.stringify(data).length > MAX_RESPONSE_BYTES) throw new Error('Embedding response too large');
+    return data;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        await reader.cancel();
+        throw new Error('Embedding response too large');
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+export async function embedTexts(texts, config, fetchImpl = fetch, { timeoutMs = 15000 } = {}) {
   if (!Array.isArray(texts) || !texts.length || texts.some((t) => typeof t !== 'string')) {
     throw new Error('Embedding inputs must be nonempty text array');
   }
@@ -33,10 +70,10 @@ export async function embedTexts(texts, config, fetchImpl = fetch) {
     // Do not allow a loopback server to redirect private text to a remote host.
     redirect: 'error',
     body: JSON.stringify({ model: settings.model, input: texts }),
-    signal: AbortSignal.timeout(15000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) throw new Error('Embedding server returned HTTP ' + response.status);
-  const payload = await response.json();
+  const payload = await parseBoundedJSON(response);
   if (!Array.isArray(payload?.data) || payload.data.length !== texts.length) {
     throw new Error('Embedding server returned an unexpected result count');
   }
@@ -69,7 +106,33 @@ export async function indexPendingFacts(store, config, limit = 24, fetchImpl = f
   return indexed;
 }
 
-export async function queryEmbedding(query, config, fetchImpl = fetch) {
+export async function queryEmbedding(query, config, fetchImpl = fetch, timeoutMs = 2500) {
   if (!embeddingSettings(config).enabled || !String(query).trim()) return null;
-  return (await embedTexts([String(query).slice(0, 2000)], config, fetchImpl))[0];
+  return (await embedTexts([String(query).slice(0, 2000)], config, fetchImpl, { timeoutMs }))[0];
+}
+
+/**
+ * One short semantic-lookup attempt, then lexical-only recall for 60s on failure.
+ * A config/model change resets the cooldown. Indexing retains its 15s budget.
+ */
+export function createResilientRecall({
+  fetchImpl = fetch, now = () => Date.now(), cooldownMs = 60000, recallTimeoutMs = 2500,
+} = {}) {
+  let blockedUntil = 0;
+  let configKey = '';
+  return async function recall(query, config) {
+    const settings = embeddingSettings(config);
+    if (!settings.enabled || !String(query).trim()) return null;
+    const key = JSON.stringify([settings.baseUrl, settings.model, config.localOnly !== false]);
+    if (key !== configKey) { configKey = key; blockedUntil = 0; }
+    if (now() < blockedUntil) return null;
+    try {
+      const vector = await queryEmbedding(query, config, fetchImpl, recallTimeoutMs);
+      blockedUntil = 0;
+      return vector;
+    } catch {
+      blockedUntil = now() + cooldownMs;
+      return null;
+    }
+  };
 }
