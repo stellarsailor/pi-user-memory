@@ -172,7 +172,7 @@ export class MemoryStore {
     for(const f of found) this.apply([{action:'forget',category:f.category,key:f.key}],{sessionId:'manual',entryId:'command'});
     return found.length;
   }
-  context(query='',maxChars=5000,vectorScores=null) {
+  context(query='',maxChars=5000,vectorScores=null,{ includeSources = false } = {}) {
     const all=this.facts();
     const byScore=all.map(f => ({f,score:relevance(f,query)+Math.max(0,vectorScores?.get(f.id) ?? 0)*12})).sort((a,b)=>b.score-a.score || b.f.updatedAt.localeCompare(a.f.updatedAt));
     // Keep a compact stable identity/preferences/goals profile, then topical context.
@@ -182,7 +182,7 @@ export class MemoryStore {
     for(const {f} of byScore.slice(0,45))push(f);
     let out='';
     for(const f of chosen) {
-      const line=`- [${f.category}/${f.key}] ${f.value} (source: session=${JSON.stringify(f.sourceSession)}, entry=${JSON.stringify(f.sourceEntry)})\n`;
+      const source=includeSources ? ` (source: session=${JSON.stringify(f.sourceSession)}, entry=${JSON.stringify(f.sourceEntry)})` : '';\n      const line=`- [${f.category}/${f.key}] ${f.value}${source}\n`;
       if ((out+line).length>maxChars) continue;
       out+=line;
     }
