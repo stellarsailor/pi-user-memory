@@ -84,7 +84,13 @@ test('short recall timeout, temporary backoff and configuration-change recovery'
     attempts++;
     if (fail) {
       return new Promise((_resolve, reject) => {
-        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        // AbortSignal.timeout uses an unref timer: retain a live handle in this mocked
+        // hung-request test so Node's test runner does not cancel the pending promise.
+        const keepAlive = setTimeout(() => reject(new Error('mock server still hung')), 250);
+        options.signal.addEventListener('abort', () => {
+          clearTimeout(keepAlive);
+          reject(options.signal.reason);
+        }, { once: true });
       });
     }
     return { ok: true, json: async () => ({data: [{index: 0, embedding: [1, 0]}]}) };
