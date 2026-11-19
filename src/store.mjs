@@ -43,6 +43,10 @@ export class MemoryStore {
         source_entry TEXT NOT NULL, recorded_at TEXT NOT NULL,
         FOREIGN KEY(fact_id) REFERENCES facts(id) ON DELETE CASCADE
       );
+      CREATE TABLE IF NOT EXISTS fact_vectors (
+        fact_id TEXT PRIMARY KEY, model TEXT NOT NULL, embedding TEXT NOT NULL,
+        FOREIGN KEY(fact_id) REFERENCES facts(id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS tombstones (
         category TEXT NOT NULL, fact_key TEXT NOT NULL,
         removed_at TEXT NOT NULL, PRIMARY KEY(category,fact_key)
@@ -77,6 +81,50 @@ export class MemoryStore {
     return this.db.prepare('SELECT id,category,fact_key AS key,value,importance,confidence,updated_at AS updatedAt,source_session AS sourceSession,source_entry AS sourceEntry FROM facts ORDER BY updated_at DESC LIMIT ?').all(limit);
   }
   count() { return this.db.prepare('SELECT count(*) AS n FROM facts').get().n; }
+
+  /** A version/model change, fact edit, or forgotten memory invalidates the old vector. */
+  pendingVectors(model, limit = 24) {
+    return this.db.prepare(`SELECT f.id, f.category, f.fact_key AS key, f.value
+      FROM facts f LEFT JOIN fact_vectors v ON v.fact_id=f.id
+      WHERE v.fact_id IS NULL OR v.model<>?
+      ORDER BY f.updated_at DESC LIMIT ?`).all(model, Math.max(1, Math.min(100, limit)));
+  }
+  saveVector(factId, expectedValue, model, vector) {
+    if (!Array.isArray(vector) || !vector.length || vector.length > 8192 ||
+        !vector.every((n) => typeof n === 'number' && Number.isFinite(n))) return false;
+    // A concurrent update must not attach an outdated embedding to a newer fact.
+    if (!this.db.prepare('SELECT 1 FROM facts WHERE id=? AND value=?').get(factId, expectedValue)) return false;
+    this.db.prepare(`INSERT INTO fact_vectors(fact_id,model,embedding) VALUES(?,?,?)
+      ON CONFLICT(fact_id) DO UPDATE SET model=excluded.model,embedding=excluded.embedding`)
+      .run(factId, model, JSON.stringify(vector));
+    return true;
+  }
+  semanticScores(vector, model) {
+    const scores = new Map();
+    if (!Array.isArray(vector) || !vector.length) return scores;
+    const norm = Math.hypot(...vector);
+    if (!Number.isFinite(norm) || norm === 0) return scores;
+    const rows = this.db.prepare('SELECT fact_id AS id,embedding FROM fact_vectors WHERE model=?').all(model);
+    for (const row of rows) {
+      let stored;
+      try { stored = JSON.parse(row.embedding); } catch { continue; }
+      if (!Array.isArray(stored) || stored.length !== vector.length) continue;
+      let dot=0, len=0;
+      for (let i=0;i<vector.length;i++) { dot+=vector[i]*stored[i];len+=stored[i]*stored[i]; }
+      if (len > 0 && Number.isFinite(dot)) scores.set(row.id, dot/(norm*Math.sqrt(len)));
+    }
+    return scores;
+  }
+  sourceReferences(term, limit = 20) {
+    const needle=String(term).trim().toLowerCase();
+    const fact=this.facts().find((f) => f.key.toLowerCase()===needle ||
+      (f.category+'/'+f.key).toLowerCase()===needle);
+    if (!fact) return null;
+    const evidence=this.db.prepare(`SELECT source_session AS sessionId,source_entry AS entryId,
+      recorded_at AS recordedAt FROM evidence WHERE fact_id=? ORDER BY recorded_at DESC LIMIT ?`)
+      .all(fact.id, Math.max(1, Math.min(limit, 50)));
+    return {fact, evidence};
+  }
   apply(operations, source, options={}) {
     const allowSensitive = options.allowSensitive === true;
     const recordedAt = new Date().toISOString();
@@ -108,6 +156,7 @@ export class MemoryStore {
           value=excluded.value, importance=excluded.importance, confidence=excluded.confidence,
           updated_at=excluded.updated_at, source_session=excluded.source_session,
           source_entry=excluded.source_entry`).run(id,op.category,key,value,importance,confidence,recordedAt,source.sessionId,source.entryId);
+        this.db.prepare('DELETE FROM fact_vectors WHERE fact_id=?').run(id);
         this.db.prepare('INSERT INTO evidence(id,fact_id,source_session,source_entry,recorded_at) VALUES(?,?,?,?,?)').run(randomUUID(),id,source.sessionId,source.entryId,recordedAt);
         result.upserted++;
       }
@@ -123,9 +172,9 @@ export class MemoryStore {
     for(const f of found) this.apply([{action:'forget',category:f.category,key:f.key}],{sessionId:'manual',entryId:'command'});
     return found.length;
   }
-  context(query='',maxChars=5000) {
+  context(query='',maxChars=5000,vectorScores=null,{ includeSources = false } = {}) {
     const all=this.facts();
-    const byScore=all.map(f => ({f,score:relevance(f,query)})).sort((a,b)=>b.score-a.score || b.f.updatedAt.localeCompare(a.f.updatedAt));
+    const byScore=all.map(f => ({f,score:relevance(f,query)+Math.max(0,vectorScores?.get(f.id) ?? 0)*12})).sort((a,b)=>b.score-a.score || b.f.updatedAt.localeCompare(a.f.updatedAt));
     // Keep a compact stable identity/preferences/goals profile, then topical context.
     const keys=new Set(); const chosen=[];
     const push=f=> {const k=`${f.category}/${f.key}`;if(!keys.has(k)){keys.add(k);chosen.push(f);}};
@@ -133,7 +182,8 @@ export class MemoryStore {
     for(const {f} of byScore.slice(0,45))push(f);
     let out='';
     for(const f of chosen) {
-      const line=`- [${f.category}/${f.key}] ${f.value}\n`;
+      const source=includeSources ? ` (source: session=${JSON.stringify(f.sourceSession)}, entry=${JSON.stringify(f.sourceEntry)})` : '';
+      const line=`- [${f.category}/${f.key}] ${f.value}${source}\n`;
       if ((out+line).length>maxChars) continue;
       out+=line;
     }

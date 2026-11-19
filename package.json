@@ -17,7 +17,7 @@
   },
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.mjs",
-    "check": "node --check src/store.mjs && node --check src/extractor.mjs && node --experimental-strip-types --check index.ts"
+    "check": "node --check src/store.mjs && node --check src/extractor.mjs && node --check src/semantic.mjs && node --experimental-strip-types --check index.ts"
   },
   "license": "MIT",
   "repository": {

@@ -8,5 +8,11 @@
   "allowSensitive": false,
   "maxContextChars": 5000,
   "maxBatchesPerRun": 8,
-  "notifyOnWrite": false
+  "notifyOnWrite": false,
+  "embeddings": {
+    "enabled": false,
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "model": "qwen3-embedding:0.6b"
+  },
+  "includeSourcesInContext": false
 }
