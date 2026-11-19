@@ -182,7 +182,8 @@ export class MemoryStore {
     for(const {f} of byScore.slice(0,45))push(f);
     let out='';
     for(const f of chosen) {
-      const source=includeSources ? ` (source: session=${JSON.stringify(f.sourceSession)}, entry=${JSON.stringify(f.sourceEntry)})` : '';\n      const line=`- [${f.category}/${f.key}] ${f.value}${source}\n`;
+      const source=includeSources ? ` (source: session=${JSON.stringify(f.sourceSession)}, entry=${JSON.stringify(f.sourceEntry)})` : '';
+      const line=`- [${f.category}/${f.key}] ${f.value}${source}\n`;
       if ((out+line).length>maxChars) continue;
       out+=line;
     }
