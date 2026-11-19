@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MemoryStore } from '../src/store.mjs';
-import { embedTexts, indexPendingFacts, queryEmbedding } from '../src/semantic.mjs';
+import { embedTexts, indexPendingFacts, queryEmbedding, createResilientRecall } from '../src/semantic.mjs';
 
 const opts = {
   localOnly: true,
@@ -53,12 +53,16 @@ test('index pending facts, rank by cosine, invalidate on updates and forget', as
   const ranked = db.context('coastal atmosphere', 2000, scores);
   assert.ok(ranked.indexOf('sea-green') < ranked.indexOf('cloud platform'),
     'semantic similarity should influence ranking even without exact word overlap');
-  assert.match(ranked, /source: session="session-abc", entry="msg-123"/);
+  assert.doesNotMatch(ranked, /source: session=/, 'default memory context should remain compact');
+  assert.match(db.context('coastal atmosphere', 2000, scores, {includeSources: true}),
+    /source: session="session-abc", entry="msg-123"/);
 
   const color = facts.find((f) => f.key === 'ui_palette');
   assert.ok(db.sourceReferences('projects/ui_palette').evidence.length === 1);
   add(db, 'ui_palette', 'Now uses navy blue', { sessionId: 'session-def', entryId: 'msg-456' });
   assert.ok(!db.semanticScores(query, 'test-embed').has(color.id), 'old vectors must be invalidated');
+  assert.equal(db.saveVector(color.id, 'Uses a sea-green interface', 'test-embed', [1, 0]), false,
+    'an in-flight embedding cannot overwrite a concurrently updated fact');
   assert.equal(db.pendingVectors('test-embed').length, 1);
   const refs = db.sourceReferences('projects/ui_palette');
   assert.equal(refs.fact.sourceEntry, 'msg-456');
@@ -70,4 +74,67 @@ test('index pending facts, rank by cosine, invalidate on updates and forget', as
   assert.equal(db.db.prepare('SELECT count(*) AS n FROM fact_vectors').get().n, 1,
     'forgotten fact vectors are cascade-deleted');
   db.close();
+});
+
+test('short recall timeout, temporary backoff and configuration-change recovery', async () => {
+  let clock = 1000;
+  let attempts = 0;
+  let fail = true;
+  const fakeFetch = async (_url, options) => {
+    attempts++;
+    if (fail) {
+      return new Promise((_resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+      });
+    }
+    return { ok: true, json: async () => ({data: [{index: 0, embedding: [1, 0]}]}) };
+  };
+  const recall = createResilientRecall({
+    fetchImpl: fakeFetch, now: () => clock, cooldownMs: 1000, recallTimeoutMs: 35,
+  });
+  assert.equal(await recall('ocean colors', opts), null, 'hung fetch should not block indefinitely');
+  assert.equal(attempts, 1);
+  fail = false;
+  assert.equal(await recall('ocean colors', opts), null, 'failure should trigger temporary lexical fallback');
+  assert.equal(attempts, 1, 'a prompt during cooldown should not request embeddings');
+  clock = 2001;
+  assert.deepEqual(await recall('ocean colors', opts), [1, 0], 'resume semantic ranking after backoff');
+  assert.equal(attempts, 2);
+
+  // A changed model should clear the previous endpoint's breaker immediately.
+  fail = true;
+  const changed = {...opts, embeddings: {...opts.embeddings, model: 'test-embed-2'}};
+  assert.equal(await recall('ocean colors', changed), null);
+  assert.equal(attempts, 3);
+  fail = false;
+  assert.deepEqual(await recall('ocean colors', opts), [1, 0]);
+  assert.equal(attempts, 4);
+});
+
+test('endpoint canonicalization, remote opt-in and HTTP failures', async () => {
+  const calls = [];
+  const mock = async (url) => {
+    calls.push(url);
+    return {ok: true, json: async () => ({data: [{index: 0, embedding: [1, 0]}]})};
+  };
+  const a = {...opts, embeddings: {...opts.embeddings, baseUrl: 'http://localhost:11434/v1/embeddings?debug=1#frag'}};
+  const b = {...opts, embeddings: {...opts.embeddings, baseUrl: 'http://localhost:11434/v1/?debug=1'}};
+  await embedTexts(['hello'], a, mock);
+  await embedTexts(['hello'], b, mock);
+  assert.deepEqual(calls, ['http://localhost:11434/v1/embeddings','http://localhost:11434/v1/embeddings']);
+
+  const remote = {...opts, localOnly: false, embeddings: {...opts.embeddings, baseUrl: 'https://api.example.com/v1'}};
+  await embedTexts(['hello'], remote, mock);
+  assert.equal(calls[2], 'https://api.example.com/v1/embeddings');
+  await assert.rejects(embedTexts(['hello'], opts, async () => ({ok: false, status: 503})), /HTTP 503/);
+});
+
+test('rejects mismatched vector dimensions and excessively large responses', async () => {
+  await assert.rejects(embedTexts(['first', 'second'], opts,
+    async () => ({ok: true, json: async () => ({data: [
+      {index:0, embedding:[1,0]}, {index:1, embedding:[0,1,0]},
+    ]})})), /dimensions differ/);
+  await assert.rejects(embedTexts(['single'], opts, async () => ({
+    ok: true, json: async () => ({data: [{index:0, embedding:[1]}], junk: 'x'.repeat(4*1024*1024)}),
+  })), /response too large/);
 });
