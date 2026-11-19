@@ -8,7 +8,7 @@ Local-first, user-centered **automatic long-term memory** for [Pi](https://githu
 
 - **Automatic extraction:** observes user-authored messages after Pi completes a run; a separately configured or current Pi model classifies durable memories. No `remember` command needed.
 - **Cross-session recall:** compact global facts are ranked by keywords and, optionally, local semantic vectors, then injected into the next Pi prompt.
-- **Automatic updates:** stable category/key pairs replace superseded values; capture keeps source session and entry IDs. Recalled facts cite their current session/entry IDs; `/user-memory sources` shows older evidence pointers.
+- **Automatic updates:** stable category/key pairs replace superseded values; capture keeps source session and entry IDs. Stored facts retain provenance; `/user-memory sources` shows current and earlier session/entry IDs. Injecting verbose source IDs into the prompt is opt-in.
 - **User controls:** inspect, export, pause, resume, forget individual facts, or clear active memories.
 - **Optional vector search:** opt-in local OpenAI-compatible embedding endpoint (for example Ollama) with vectors stored in SQLite. No additional npm dependencies; lexical search still works when the embedding server is down.
 - **Local-first:** SQLite using Node.js built-in `node:sqlite`; global path `~/.pi/agent/user-memory/memory.sqlite`, outside any git repository. No server, telemetry or third-party database.
@@ -48,6 +48,7 @@ Configuration options:
 | `localOnly` | `true` | Block non-loopback model endpoints |
 | `allowSensitive` | `false` | Allow explicitly requested sensitive facts marked by extractor |
 | `maxContextChars` | `5000` | Injected memory character budget (300–16,000) |
+| `includeSourcesInContext` | `false` | Add full session/entry references to each injected memory fact; off by default to save tokens |
 | `maxBatchesPerRun` | `8` | Extraction batches of up to six user messages per settled run |
 | `notifyOnWrite` | `false` | Show non-error memory update notifications |
 | `embeddings.enabled` | `false` | Enable semantic ranking and background-on-turn indexing |
@@ -76,10 +77,12 @@ Add this to `~/.pi/agent/user-memory/config.json` (alongside your existing setti
 When enabled, new facts are embedded after extraction (up to 24 facts per settled turn).
 Use `/user-memory index` to backfill old facts, repeating for additional batches.
 A question is embedded only at recall time. Vector scores are combined with keyword
-matching and the stable preference/identity/goal shortlist. If embedding fails, Pi
-still recalls facts lexically. Model changes cause lazy reindexing, and updates/forget
+matching and the stable preference/identity/goal shortlist. A slow recall request times out
+in 2.5 seconds. After an embedding failure, Pi skips semantic calls for 60 seconds,
+using lexical recall immediately; changing the model/endpoint resets the cooldown. Model changes cause lazy reindexing, and updates/forget
 invalidate or remove old vectors. The endpoint is limited to loopback when
-`localOnly=true`; redirects are blocked. No document/PDF ingest yet.
+`localOnly=true`; redirects are blocked and responses are size-limited. Indexing
+at agent settle time retains its separate 15-second request timeout. No document/PDF ingest yet.
 
 ## User commands
 
@@ -117,7 +120,7 @@ Only user-authored message text is fed to extraction; assistant/tool output is n
 
 ## Limitations and security
 
-- Semantic search is **optional**, disabled by default, and searches saved memory facts only (not PDF/document contents). Source IDs are pointers into Pi transcripts, not verified quotations or clickable links.
+- Semantic search is **optional**, disabled by default, and searches saved memory facts only (not PDF/document contents). Source IDs are pointers into Pi transcripts, not verified quotations or clickable links. `/user-memory sources` is available without adding ID overhead to every model prompt.
 - Deduplication depends on the extractor choosing the same stable key. Similar facts with different keys may coexist; inspect memory periodically.
 - Memory is personal, global and machine-local. It does not sync across devices. A remote embedding endpoint is only permitted if `localOnly=false`, which may transmit private memories to that endpoint.
 - Forgetting clears the saved memory and its evidence, **not original Pi session transcripts**, exported backups, external model logs, or provider retention. Manual transcript deletion is separate. Deleting every historical mention from another source is not done by this plugin.
