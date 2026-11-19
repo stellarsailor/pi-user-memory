@@ -81,8 +81,10 @@ matching and the stable preference/identity/goal shortlist. A slow recall reques
 in 2.5 seconds. After an embedding failure, Pi skips semantic calls for 60 seconds,
 using lexical recall immediately; changing the model/endpoint resets the cooldown. Model changes cause lazy reindexing, and updates/forget
 invalidate or remove old vectors. The endpoint is limited to loopback when
-`localOnly=true`; redirects are blocked and responses are size-limited. Indexing
-at agent settle time retains its separate 15-second request timeout. No document/PDF ingest yet.
+`localOnly=true`; redirects are blocked and responses are size-limited. Requests are sent
+without an `Authorization` header, and any query string or fragment in `baseUrl` is stripped,
+so endpoints that need a key in the URL are not supported. Indexing at agent settle time
+retains its separate 15-second request timeout. No document/PDF ingest yet.
 
 ## User commands
 
