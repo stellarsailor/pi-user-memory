@@ -1,0 +1,43 @@
+{
+  "name": "pi-user-memory",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "User-centric, local-first memory extension for Pi",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "test": "node --experimental-strip-types --test test/*.test.mjs",
+    "check": "node --check src/store.mjs && node --check src/extractor.mjs && node --experimental-strip-types --check index.ts"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/stellarsailor/pi-user-memory.git"
+  },
+  "bugs": {
+    "url": "https://github.com/stellarsailor/pi-user-memory/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-agent",
+    "long-term-memory",
+    "personal-memory"
+  ],
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE",
+    "config.example.json"
+  ]
+}

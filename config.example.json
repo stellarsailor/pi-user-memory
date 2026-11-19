@@ -1,0 +1,12 @@
+{
+  "enabled": true,
+  "memoryModel": {
+    "provider": "YOUR_LOCAL_PROVIDER",
+    "id": "YOUR_CONFIGURED_MODEL_ID"
+  },
+  "localOnly": true,
+  "allowSensitive": false,
+  "maxContextChars": 5000,
+  "maxBatchesPerRun": 8,
+  "notifyOnWrite": false
+}
