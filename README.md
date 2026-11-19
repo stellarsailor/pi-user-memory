@@ -7,9 +7,10 @@ Local-first, user-centered **automatic long-term memory** for [Pi](https://githu
 ## Features
 
 - **Automatic extraction:** observes user-authored messages after Pi completes a run; a separately configured or current Pi model classifies durable memories. No `remember` command needed.
-- **Cross-session recall:** compact global facts are injected into the next Pi prompt, ranked using simple keyword matching and a stable user-profile shortlist.
-- **Automatic updates:** stable category/key pairs replace superseded values; capture keeps source session and entry IDs.
+- **Cross-session recall:** compact global facts are ranked by keywords and, optionally, local semantic vectors, then injected into the next Pi prompt.
+- **Automatic updates:** stable category/key pairs replace superseded values; capture keeps source session and entry IDs. Recalled facts cite their current session/entry IDs; `/user-memory sources` shows older evidence pointers.
 - **User controls:** inspect, export, pause, resume, forget individual facts, or clear active memories.
+- **Optional vector search:** opt-in local OpenAI-compatible embedding endpoint (for example Ollama) with vectors stored in SQLite. No additional npm dependencies; lexical search still works when the embedding server is down.
 - **Local-first:** SQLite using Node.js built-in `node:sqlite`; global path `~/.pi/agent/user-memory/memory.sqlite`, outside any git repository. No server, telemetry or third-party database.
 - **Privacy defaults:** `localOnly: true` prevents sending data to a non-loopback model; sensitive memories are off by default; common credential strings are rejected. SQLite and exports use owner-only file permissions where the OS supports them.
 - **Does not replace Pi compaction** or alter transcripts, project files or `AGENTS.md`.
@@ -49,6 +50,36 @@ Configuration options:
 | `maxContextChars` | `5000` | Injected memory character budget (300–16,000) |
 | `maxBatchesPerRun` | `8` | Extraction batches of up to six user messages per settled run |
 | `notifyOnWrite` | `false` | Show non-error memory update notifications |
+| `embeddings.enabled` | `false` | Enable semantic ranking and background-on-turn indexing |
+| `embeddings.baseUrl` | `http://127.0.0.1:11434/v1` | OpenAI-compatible local embeddings base URL |
+| `embeddings.model` | `qwen3-embedding:0.6b` | Installed embedding model name |
+
+### Optional local semantic search
+
+Requires an embedding service implementing the OpenAI-compatible `POST /v1/embeddings` endpoint.
+For example, with Ollama (installed separately):
+
+```bash
+ollama pull qwen3-embedding:0.6b
+```
+
+Add this to `~/.pi/agent/user-memory/config.json` (alongside your existing settings):
+
+```json
+"embeddings": {
+  "enabled": true,
+  "baseUrl": "http://127.0.0.1:11434/v1",
+  "model": "qwen3-embedding:0.6b"
+}
+```
+
+When enabled, new facts are embedded after extraction (up to 24 facts per settled turn).
+Use `/user-memory index` to backfill old facts, repeating for additional batches.
+A question is embedded only at recall time. Vector scores are combined with keyword
+matching and the stable preference/identity/goal shortlist. If embedding fails, Pi
+still recalls facts lexically. Model changes cause lazy reindexing, and updates/forget
+invalidate or remove old vectors. The endpoint is limited to loopback when
+`localOnly=true`; redirects are blocked. No document/PDF ingest yet.
 
 ## User commands
 
@@ -56,6 +87,8 @@ Configuration options:
 /user-memory                    # status
 /user-memory profile            # grouped profile summary
 /user-memory show               # individual saved facts
+/user-memory sources goals/home  # current source and earlier session/entry references
+/user-memory index              # embed up to 24 existing facts
 /user-memory forget cats        # remove matching remembered facts
 /user-memory forget preferences/pets
 /user-memory pause              # suspend extraction and injection
@@ -84,14 +117,19 @@ Only user-authored message text is fed to extraction; assistant/tool output is n
 
 ## Limitations and security
 
-- This is **not semantic/vector search**. Retrieval uses bounded lexical matching plus global identity/preferences/goals; a later version can add embeddings or hybrid search.
+- Semantic search is **optional**, disabled by default, and searches saved memory facts only (not PDF/document contents). Source IDs are pointers into Pi transcripts, not verified quotations or clickable links.
 - Deduplication depends on the extractor choosing the same stable key. Similar facts with different keys may coexist; inspect memory periodically.
-- Memory is personal, global and machine-local. It does not sync across devices.
+- Memory is personal, global and machine-local. It does not sync across devices. A remote embedding endpoint is only permitted if `localOnly=false`, which may transmit private memories to that endpoint.
 - Forgetting clears the saved memory and its evidence, **not original Pi session transcripts**, exported backups, external model logs, or provider retention. Manual transcript deletion is separate. Deleting every historical mention from another source is not done by this plugin.
 - Do not enable cloud extraction unless you accept the provider's data policies. `allowSensitive` is not a substitute for a privacy review; detection is best effort.
 - Extraction is performed at settle time and can add latency/compute cost. It is not a background daemon.
 - Imported package code executes with Pi's OS permissions; review before installation.
 - A message's text is truncated to 4,000 characters, and extraction uses bounded batches. Non-text attachments (images, voice) are not analyzed.
+
+## Next work (not included in this PR)
+
+1. **Document RAG:** ingest PDFs, images/OCR and Markdown with chunking, citations, per-document permissions, and hybrid retrieval.
+2. **Web UI:** local dashboard to review/edit memories, inspect provenance, control indexed documents, and manage privacy settings.
 
 ## Development
 
@@ -100,6 +138,6 @@ npm run check
 npm test
 ```
 
-Tests use Node's built-in test runner and an in-memory / temporary SQLite database. They cover upsert, dedup, updates, provenance, tombstones, sensitive/credential guardrails, seen entries, local-only policy, mocked model extraction, injection and session handoff.
+Tests use Node's built-in test runner and an in-memory / temporary SQLite database. They cover upsert, dedup, updates, provenance, semantic vector ranking/invalidation, tombstones, sensitive/credential guardrails, seen entries, local-only policy, mocked model extraction, injection and session handoff.
 
 License: MIT.
