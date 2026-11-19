@@ -47,10 +47,10 @@ test('index pending facts, rank by cosine, invalidate on updates and forget', as
   };
   assert.equal(await indexPendingFacts(db, opts, 24, fakeFetch), 2);
   assert.equal(await indexPendingFacts(db, opts, 24, fakeFetch), 0);
-  const query = await queryEmbedding('ocean-like color palette', opts,
+  const query = await queryEmbedding('coastal atmosphere', opts,
     async () => ({ ok: true, json: async () => ({ data: [{ index: 0, embedding: [1, 0] }] }) }));
   const scores = db.semanticScores(query, 'test-embed');
-  const ranked = db.context('ocean-like color palette', 2000, scores);
+  const ranked = db.context('coastal atmosphere', 2000, scores);
   assert.ok(ranked.indexOf('sea-green') < ranked.indexOf('cloud platform'),
     'semantic similarity should influence ranking even without exact word overlap');
   assert.match(ranked, /source: session="session-abc", entry="msg-123"/);
